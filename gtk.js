@@ -11,7 +11,8 @@ const GLOBAL_WHITESPACE = 20
 const GLOBAL_SPACING = 12
 
 function generateDefaultConfig(keybindOffset) {
-	return {enabled: true, mouseButton: 0, clickType: 0, keybindType: 0, keybindValue: 65476+keybindOffset, miliseconds: 100, seconds: 0, minutes: 0, hours: 0}
+	return {enabled: true, mouseButton: 0, clickType: 0, keybindType: 0, 
+		keybindValue: 65476+keybindOffset, miliseconds: 100, seconds: 0, minutes: 0, hours: 0}
 }
 
 const defaultConfigs = [generateDefaultConfig(0)]
@@ -48,20 +49,29 @@ function addOption(text, option, parent, homogeneous=true) {
 	parent.append(row)
 }
 
+function showMaxConfigsError(window) {
+	const dialog = new Gtk.MessageDialog({transient_for: window, modal: true, message_type: Gtk.MessageType.ERROR,
+		 buttons: Gtk.ButtonsType.OK, text: "Maximum amount of configurations reached."})
+	dialog.connect("response", () => {
+		dialog.destroy()
+	})
+	dialog.show()
+}
+
+function showConflictingKeybindError(window) {
+	const dialog = new Gtk.MessageDialog({transient_for: window, modal: true, message_type: Gtk.MessageType.ERROR,
+		 buttons: Gtk.ButtonsType.OK, text: "Another configuration with the same keybind is already enabled, please resolve this first."})
+	dialog.connect("response", () => {
+		dialog.destroy()
+	})
+	dialog.show()
+}
+
 let configAmount = 0
 let maxConfigs = 6
 function createConfig(window, notebook, enabledValue=true, mouseButtonValue=0, clickTypeValue=0, keybindTypeValue=0,
 	 keybindValue=65476, miliseconds=100, seconds=0, minutes=0, hours=0) {
 	let thisConfig = configAmount
-	if (thisConfig >= maxConfigs) {
-		const dialog = new Gtk.MessageDialog({transient_for: window, modal: true, message_type: Gtk.MessageType.ERROR,
-			 buttons: Gtk.ButtonsType.OK, text: "Maximum amount of configurations reached."})
-		dialog.connect("response", () => {
-			dialog.destroy()
-		})
-		dialog.show()
-		return
-	}
 	const mainBox = new Gtk.Box({
 		orientation: Gtk.Orientation.VERTICAL,
 		spacing: GLOBAL_SPACING,
@@ -92,12 +102,12 @@ function createConfig(window, notebook, enabledValue=true, mouseButtonValue=0, c
 	const clickType = new Gtk.DropDown({model: Gtk.StringList.new(["Click", "Hold"]), selected: clickTypeValue})
 	const keybindType = new Gtk.DropDown({model: Gtk.StringList.new(["Click", "Hold"]), selected: keybindTypeValue})
 	let keybind = keybindValue
-	const keybindButton = new Gtk.Button({label: Gdk.keyval_name(keybind+thisConfig)})
+	const keybindButton = new Gtk.Button({label: Gdk.keyval_name(keybind)})
 	const milisecondsSpinButton = new Gtk.SpinButton({adjustment: new Gtk.Adjustment({lower: 0, upper: 1000, step_increment: 1}), value: miliseconds})
 	const secondsSpinButton = new Gtk.SpinButton({adjustment: new Gtk.Adjustment({lower: 0, upper: 60, step_increment: 1}), value: seconds})
 	const minutesSpinButtons = new Gtk.SpinButton({adjustment: new Gtk.Adjustment({lower: 0, upper: 60, step_increment: 1}), value: minutes})
 	const hoursSpinButton = new Gtk.SpinButton({adjustment: new Gtk.Adjustment({lower: 0, upper: 24, step_increment: 1}), value: hours})
-	const startButton = new Gtk.Button({label: `Start (${Gdk.keyval_name(keybind+thisConfig)})`})
+	const startButton = new Gtk.Button({label: `Start (${Gdk.keyval_name(keybind)})`})
 
 	addOption("Mouse Button", mouseButton, optionsColumn)
 	addOption("Click Type", clickType, optionsColumn)
@@ -148,9 +158,22 @@ function createConfig(window, notebook, enabledValue=true, mouseButtonValue=0, c
 		minutesSpinButtons.set_sensitive(value !== 1)
 		hoursSpinButton.set_sensitive(value !== 1)
 	})
-	enabled.connect("notify::active", (switchElement) => {
-		startButton.set_sensitive(switchElement.active)
-		configs[thisConfig].enabled = switchElement.active
+	enabled.connect("notify::active", () => {
+		let used = false
+		for (let config of configs) {
+			if (!config.enabled || config.keybindValue != keybind) continue
+			used = true
+			break
+		}
+		if (used && enabled.active === true) {
+			showConflictingKeybindError(window)
+			listening = false
+			enabled.active = false
+			return
+		}
+
+		startButton.set_sensitive(enabled.active)
+		configs[thisConfig].enabled = enabled.active
 		saveConfigsToFile()
 	})
 
@@ -162,6 +185,18 @@ function createConfig(window, notebook, enabledValue=true, mouseButtonValue=0, c
 	mainBox.add_controller(keyboardListener)
 	keyboardListener.connect("key-released", (controller, keyval) => {
 		if (!listening) return
+		let used = false
+		for (let config of configs) {
+			if (!config.enabled || config.keybindValue != keyval) continue
+			used = true
+			break
+		}
+		if (used) {
+			showConflictingKeybindError(window)
+			listening = false
+			keybindButton.set_label(Gdk.keyval_name(keybind))
+			return
+		}
 		listening = false
 		keybind = keyval
 		keybindButton.set_label(Gdk.keyval_name(keyval))
@@ -188,8 +223,15 @@ application.connect('activate', () => {
 	const titlebar = new Gtk.HeaderBar({show_title_buttons: true})
 	const newTabButton = new Gtk.Button({label: "New Config"})
 	newTabButton.connect("clicked", () => {
-		createConfig(window, notebook)
-		configs.push(generateDefaultConfig(configAmount-1))
+		const config = generateDefaultConfig(configAmount)
+		if (configAmount >= maxConfigs) {
+			showMaxConfigsError(window)
+			return
+		}
+		createConfig(window, notebook, config.enabled, config.mouseButton, config.clickType, config.keybindType,
+			 config.keybindValue, config.miliseconds, config.seconds, config.minutes, config.hours)
+		configs.push(config)
+		saveConfigsToFile()
 	})
 	titlebar.pack_start(newTabButton)
 	window.set_titlebar(titlebar)
